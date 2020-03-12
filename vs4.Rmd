@@ -1,0 +1,269 @@
+---
+title: "vs4"
+output: html_document
+---
+
+```{r}
+#Load Libraries
+library(readxl) #Library importing excal sheets
+library(tidyverse)
+library(ggplot2) #Library for plots  
+library(tidyr)
+library(readr)
+library(tsibble)
+library(lubridate) #Library for time-serie analysis 
+library(zoo) #Library for time-serie analysis 
+library(RSQLite) #SQL Light library 
+library(RMySQL) #MySQL library 
+library(DBI) #Connect to database library 
+library(shiny) #Dashboard library 
+library(leaflet) #World maps 
+library(HDInterval) #Highest (Posterior) Density Intervals library 
+library(plotly)
+library(ggforce)
+library(ggalluvial)
+library(stlplus)
+library(viridis)
+library(dplyr)
+```
+
+
+#Loading the data into R
+```{r}
+demand_df <- read_excel("~/OneDrive/Personligt/Uddannelse/Uni/Projekt/VS4/data/demand.xlsx",sheet = "demand")
+
+#str(demand_df)
+
+country_continent_codes <- read.csv("~/OneDrive/Personligt/Uddannelse/Uni/Projekt/VS4/R-coding/country-and-continent-codes-list-csv_csv.csv")
+
+production_df <- read_excel("~/OneDrive/Personligt/Uddannelse/Uni/Projekt/VS4/data/production.xlsx")
+
+cost_df_transport <- read_excel("~/OneDrive/Personligt/Uddannelse/Uni/Projekt/VS4/data/cost.xlsx",sheet = "transport")
+
+cost_df_production <- read_excel("~/OneDrive/Personligt/Uddannelse/Uni/Projekt/VS4/data/cost.xlsx",sheet = "manufacturing")  
+```
+
+#Filter the data 
+###Demand data-set
+```{r}
+df_country_code <- read.csv('https://raw.githubusercontent.com/plotly/datasets/master/2014_world_gdp_with_codes.csv') %>% 
+  select(country = COUNTRY, code = CODE) %>% 
+  add_row(country = "Martinique", code = "MTQ") %>% 
+  group_by(country, code) %>% 
+  tally() %>% 
+  select(country, code)
+
+df_country_continent_codes <- country_continent_codes %>% 
+  select(Continent_Name, Three_Letter_Country_Code) %>% 
+  filter(!(Continent_Name %in% c("Asia") & Three_Letter_Country_Code %in% c("RUS", "TUR", "GEO", "ARM", "CYP")),
+         !(Continent_Name %in% c("Europe") & Three_Letter_Country_Code %in% c("KAZ")))
+
+df_demand <- demand_df %>% 
+  filter(capacity_group %in% c("BLA_V90","BLA_V116","BLA_V150_5.6MW","BLA_V80","BLA_V136","BLA_V162","BLA_V82","BLA_V126","BLA_V150","BLA_V105","BLA_V155","BLA_V110","BLA_V117","BLA_V112","BLA_V100","BLA_V120","BLA_V47"),
+         !plant_name %in% c("Z0R9","Z0R3","Z0R6","Z0R4","Z0R5","EXT","X_G","####","SBU","LMI"),
+         rotor_size != "Not assigned",
+         quantity > 0) %>% 
+  mutate(plant_country = case_when(
+    plant_name == "Vestas Blade BY Taranto" ~ "Italy",
+    plant_name == "Vestas Blades Lem" ~ "Denmark",
+    plant_name == "TPI Wind Blade Dafeng (565273)" ~ "China",
+    plant_name == "Aeris Indústria e Co  (564620)" ~ "Brazil",
+    plant_name == "Vestas Kompozit Kanat Sanayi" ~ "Turkey",
+    plant_name == "Vestas Manufacturing Rus" ~ "Russia",
+    plant_name == "TPI Composites INDIA LLP" ~ "India",
+    plant_name == "Vestas Blade BW Windsor" ~ "USA",
+    plant_name == "Vestas Blade BB Brighton" ~ "USA",
+    plant_name == "Aeris Energy          (564620)" ~ "Brazil",
+    plant_name == "TMT China (Blade) (552107)" ~ "China",
+    plant_name == "Vestas Blades Daimiel" ~ "Spain",
+    plant_name == "TPI COMPOSITES        (575733)" ~ "Mexico",
+    plant_name == "Vestas Blades Tianjin" ~ "China",
+    plant_name == "VWT Blades Ahmedabad" ~ "India",
+    plant_name == "Shanghai Aeolon Wind  (573507)" ~ "China",
+    plant_name == "Vestas Blade DL Lauchammer" ~ "Germany",
+    plant_name == "Vestas Man Rus -44200320" ~ "Russia",
+    plant_name == "TPI Wind Blade Yangzho(578755)" ~ "China",
+    TRUE ~ "ERROR"
+  )) %>% 
+  mutate(plant_location = case_when(
+    plant_name == "Vestas Blade BY Taranto" ~ "Taranto",
+    plant_name == "Vestas Blades Lem" ~ "Lem",
+    plant_name == "TPI Wind Blade Dafeng (565273)" ~ "Dafeng",
+    plant_name == "Aeris Indústria e Co  (564620)" ~ "Aeris",
+    plant_name == "Vestas Kompozit Kanat Sanayi" ~ "Sanayi",
+    plant_name == "Vestas Manufacturing Rus" ~ "Russia",
+    plant_name == "TPI Composites INDIA LLP" ~ "TPI",
+    plant_name == "Vestas Blade BW Windsor" ~ "Windsor",
+    plant_name == "Vestas Blade BB Brighton" ~ "Brighton",
+    plant_name == "Aeris Energy          (564620)" ~ "Aeris",
+    plant_name == "TMT China (Blade) (552107)" ~ "TMT",
+    plant_name == "Vestas Blades Daimiel" ~ "Daimiel",
+    plant_name == "TPI COMPOSITES        (575733)" ~ "TPI",
+    plant_name == "Vestas Blades Tianjin" ~ "Tianjin",
+    plant_name == "VWT Blades Ahmedabad" ~ "Ahmedabad",
+    plant_name == "Shanghai Aeolon Wind  (573507)" ~ "Shanghai",
+    plant_name == "Vestas Blade DL Lauchammer" ~ "Lauchammer",
+    plant_name == "Vestas Man Rus -44200320" ~ "Russia",
+    plant_name == "TPI Wind Blade Yangzho(578755)" ~ "Yangzho",
+    TRUE ~ "ERROR"
+  )) %>%
+  mutate(plant_continent = case_when(
+    plant_country %in% c("Italy","Denmark","Germany","Turkey", "Spain","Russia") ~ "Europe",
+    plant_country %in% c("China","India") ~ "Asia",
+    plant_country %in% c("USA","Mexico") ~ "North America",
+    plant_country %in% c("Brazil") ~ "South America",
+    TRUE ~ "ERROR"
+  )) %>% 
+  separate(capacity_group, c("bla", "capacity_group")) %>% 
+  select(-bla) %>% 
+  mutate(delivery_country= replace(delivery_country, delivery_country == "USA", "United States")) %>% 
+  mutate(delivery_country= replace(delivery_country, delivery_country == "South Korea", "Korea, South")) %>% 
+  mutate(delivery_country= replace(delivery_country, delivery_country == "Dominican Rep.", "Dominican Republic")) %>% 
+  mutate(delivery_country= replace(delivery_country, delivery_country == "Curaçao", "Curacao")) %>% 
+  mutate(delivery_country = replace(delivery_country, delivery_country == "Russian Fed.", "Russia")) %>% 
+  mutate(delivery_country = replace(delivery_country, delivery_country == "Dutch Antilles", "Curacao")) %>% 
+  inner_join(df_country_code, by = c("delivery_country" = "country")) %>% 
+  inner_join(df_country_continent_codes, by = c("code" = "Three_Letter_Country_Code")) 
+  
+df_fil$capacity_group <- ordered(df_fil$capacity_group, c("V47","V80","V82","V90","V100","V105","V110","V112","V116","V117","V120","V126","V136","V150","V150_5.6MW","V155","V162"))
+
+df_fil$plant_country <- ordered(df_fil$plant_country, c("China","India","Denmark","Germany","Italy","Spain","Turkey", "Russia","USA","Mexico","Brazil"))
+
+
+
+#unique(df_fil_fil$WTG_Type)
+#unique(df_fil$capacity_group)
+#unique(df_fil$capacity_type)
+#unique(df_fil$rotor_size)
+#unique(df_fil$demand_area)
+#unique(df_fil$demand_sub_region)
+#unique(df_fil$delivery_country)
+#unique(df_fil$delivery_country_abbreviation)
+#unique(df_fil$plant)
+#unique(df_fil$plant_name)
+#unique(df_fil$ExWorks_Year)
+#unique(df_fil$ExW_Month)
+#unique(df_fil$ExW_Year_Week)
+#unique(df_fil$quantity)
+#unique(df_fil$plant_country)
+#unique(df_fil$Continent_Name)
+ 
+                                                 
+ 
+
+
+```
+
+
+
+###Production Data-set
+```{r}
+#str(production_df)
+
+df_production <- production_df %>% 
+  select(plant_country_add = `Plant Country`, plant_country = `Plant country Des.`, plant = Plant, plant_name = `Plant name`, capacity_group = `Capacity Group`, capacity_type = `Capacity Type`, year = `Calendar Year`, week_year = `Calendar Year/Week`, volume = EA) %>% 
+  filter(str_detect(capacity_group, "BLA_"), volume > 0) %>% 
+  mutate(plant_location = case_when(
+    plant_name == "Vestas Blade BY Taranto" ~ "Taranto",
+    plant_name == "Vestas Blades Lem" ~ "Lem",
+    plant_name == "TPI Wind Blade Dafeng (565273)" ~ "Dafeng",
+    plant_name == "Aeris Indústria e Co  (564620)" ~ "Aeris",
+    plant_name == "Vestas Kompozit Kanat Sanayi" ~ "Sanayi",
+    plant_name == "Vestas Manufacturing Rus" ~ "Russia",
+    plant_name == "TPI Composites INDIA LLP" ~ "TPI India",
+    plant_name == "Vestas Blade BW Windsor" ~ "Windsor",
+    plant_name == "Vestas Blade BB Brighton" ~ "Brighton",
+    plant_name == "Aeris Energy          (564620)" ~ "Aeris",
+    plant_name == "CLOSED Aeris Indústria(564620)" ~ "Aeris",
+    plant_name == "TMT China (Blade) (552107)" ~ "TMT China",
+    plant_name == "Vestas Blades Daimiel" ~ "Daimiel",
+    plant_name == "TPI COMPOSITES        (575733)" ~ "TPI",
+    plant_name == "Vestas Blades Tianjin" ~ "Tianjin",
+    plant_name == "VWT Blades Ahmedabad" ~ "Ahmedabad",
+    plant_name == "Shanghai Aeolon Wind  (573507)" ~ "Shanghai",
+    plant_name == "Vestas Blade DL Lauchammer" ~ "Lauchammer",
+    plant_name == "Vestas Man Rus -44200320" ~ "Russia",
+    plant_name == "TPI Wind Blade Yangzho(578755)" ~ "Yangzho",
+    TRUE ~ "ERROR"
+  ))
+
+df_production_fill$capacity_group <- ordered(df_production_fill$capacity_group, c("BLA_V47","BLA_V80","BLA_V82","BLA_V90","BLA_V100","BLA_V105","BLA_V110","BLA_V112","BLA_V116","BLA_V117","BLA_V120","BLA_V126","BLA_V136","BLA_V150","BLA_V150_5.6MW","BLA_V155","BLA_V162"))
+#unique(df_production_fill$plant)
+```
+
+
+###Cost Data-set
+```{r}
+#Transport cost data-set
+
+df_country_continent_codes <- country_continent_codes %>% 
+  select(Continent_Name, Two_Letter_Country_Code, Three_Letter_Country_Code) %>% 
+  filter(!(Continent_Name %in% c("Asia") & Three_Letter_Country_Code %in% c("RUS", "TUR", "GEO", "ARM", "CYP")),
+         !(Continent_Name %in% c("Europe") & Three_Letter_Country_Code %in% c("KAZ")))
+
+trans_cost_df <- cost_df_transport %>% 
+  filter(str_detect(CapacityGroup, "BLA_")) %>% 
+  select(plant = Plant, plant_country = "Plant Country", capacity_group = CapacityGroup, delivery_country = "Destination Country", delivery_zone = "Destination Zone", total_voyage_cost = "Total Voyage Cost", total_cost = "Sea Cost ex Customs", TransportMode) %>% 
+  separate(capacity_group, c("bla", "capacity_group")) %>% 
+  select(-bla) %>% 
+  inner_join(df_country_continent_codes, by = c("plant_country" = "Two_Letter_Country_Code")) %>% 
+  select(-plant_country, -Continent_Name) %>% 
+  rename(plant_country = Three_Letter_Country_Code) %>% 
+  inner_join(df_country_continent_codes, by = c("delivery_country" = "Two_Letter_Country_Code")) %>%
+  select(-delivery_country) %>%
+  rename(delivery_country = Three_Letter_Country_Code) %>% 
+  filter(total_cost > 0) 
+
+#Manufacuturing cost data-set 
+manu_cost_df <- cost_df_production %>% 
+  filter(str_detect(capacity_group, "BLA_")) %>% 
+  select(plant, plant_name, capacity_group, product, cost, cost_eur) %>% 
+  filter(!capacity_group %in% c("BLA_CIM", "BLA_NON-CTR"), !plant == "#") %>% 
+  separate(capacity_group, c("bla", "capacity_group")) %>% 
+  select(-bla)
+```
+
+
+
+
+
+
+
+
+
+
+#New production introduction
+```{r}
+df <- df_fil %>% 
+  filter(ExWorks_Year < 2020) %>% 
+  select(ExWorks_Year, quantity, capacity_group) %>% 
+  group_by(ExWorks_Year, capacity_group) %>% 
+  summarise(n = sum(quantity))
+
+p1 <- ggplot(df, aes(x = ExWorks_Year, y=n, group=factor(capacity_group))) +
+  geom_line(aes(color=capacity_group)) +
+  labs(x = "Year", y = "Volume [blades]", colour = "Blade Type")
+
+p1
+```
+
+
+#Heatmap
+```{r}
+#Heat map: production country vs blade type
+df <- df_fil %>% 
+  filter(ExWorks_Year < 2020, ExWorks_Year > 2014) %>% 
+  select(ExWorks_Year, quantity, capacity_group, plant_country) %>% 
+  group_by(ExWorks_Year, capacity_group, plant_country) %>% 
+  summarise(volume = sum(quantity))
+
+p1 <- ggplot(df, aes(x = plant_country, y = capacity_group)) + 
+  geom_tile(aes_string(fill = df$volume), colour = "white") +
+  facet_grid(cols = vars(as.factor(df$ExWorks_Year))) + 
+  scale_fill_gradientn(colours = c("#84DE02", "#FFBF00", "#FF7E00", "#AF002A","#580015"), values = c(0, 0.2, 0.45, 0.6, 0.8, 1), breaks = c(0, 50, 500, 1000, 1500, 2250)) + 
+  labs(x = "Manufacturing Country", y = "Blade Type", 
+       fill = "Volume [blades]") +
+  theme(axis.text.x=element_text(angle=90, hjust=1))
+p1
+```
+
